@@ -1,132 +1,255 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>محول الفيديو</title>
-    <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
-    <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
+    <title>ضغط الفيديو في المتصفح</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .alert { background: #ffeeba; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
-        #app { display: none; }
-        #progress { width: 100%; background: #f3f3f3; margin: 10px 0; }
-        #progress-bar { height: 20px; background: #4CAF50; width: 0%; }
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        #progress {
+            width: 100%;
+            background-color: #f3f3f3;
+            margin: 20px 0;
+            display: none;
+        }
+        #progress-bar {
+            height: 30px;
+            background-color: #4CAF50;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        #status {
+            margin: 15px 0;
+            font-weight: bold;
+            min-height: 50px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        video {
+            max-width: 100%;
+            margin-top: 20px;
+            display: none;
+        }
+        .warning {
+            color: red;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <div id="compat-alert" class="alert">
-        <h3>تهيئة النظام...</h3>
-        <p id="compat-message">جارٍ التحقق من المتطلبات الأساسية</p>
+    <h1>أداة ضغط الفيديو في المتصفح</h1>
+    <div id="ios-warning" class="warning" style="display: none;"></div>
+    
+    <input type="file" id="file-input" accept="video/*" capture="environment">
+    <button id="compress-btn" disabled>ضغط الفيديو</button>
+    <button id="download-btn" disabled style="display: none;">تنزيل الفيديو المضغوط</button>
+    
+    <div id="progress">
+        <div id="progress-bar"></div>
     </div>
+    
+    <div id="status">اختر ملف فيديو لبدء الضغط</div>
+    
+    <video id="original-video" controls playsinline></video>
+    <video id="compressed-video" controls playsinline></video>
 
-    <div id="app">
-        <h1>محول الفيديو في المتصفح</h1>
-        <input type="file" id="file-input" accept="video/*" />
-        <button id="convert-btn">بدء التحويل</button>
-        <div id="progress" style="display:none;">
-            <div id="progress-bar"></div>
-        </div>
-        <div id="status"></div>
-        <video id="output" controls style="display:none; width:100%;"></video>
-    </div>
-
-    <!-- استخدام إصدارات محددة ومختبرة -->
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.10.1/dist/ffmpeg.min.js"></script>
     <script>
-    // إصدارات معتمدة
-    const CORE_VERSION = '0.9.2';
-    const CORE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/ffmpeg-core.js`;
-
-    async function initializeFFmpeg() {
-        try {
-            // التحقق من دعم WASM
-            if (!WebAssembly) throw new Error("المتصفح لا يدعم WebAssembly");
-            
-            const { createFFmpeg, fetchFile } = FFmpeg;
-            const ffmpeg = createFFmpeg({
-                log: true,
-                corePath: CORE_URL,
-                progress: ({ ratio }) => {
-                    const percent = Math.round(ratio * 100);
-                    document.getElementById('progress-bar').style.width = `${percent}%`;
-                }
-            });
-
-            document.getElementById('compat-message').textContent = 'جارٍ تحميل محرك FFmpeg...';
-            document.getElementById('progress').style.display = 'block';
-
-            await ffmpeg.load();
-            
-            document.getElementById('compat-alert').style.display = 'none';
-            document.getElementById('app').style.display = 'block';
-            document.getElementById('progress').style.display = 'none';
-            document.getElementById('status').textContent = 'جاهز للتحويل';
-
-            setupUI(ffmpeg, fetchFile);
-        } catch (error) {
-            showError(error);
+        // عناصر واجهة المستخدم
+        const fileInput = document.getElementById('file-input');
+        const compressBtn = document.getElementById('compress-btn');
+        const downloadBtn = document.getElementById('download-btn');
+        const progressBar = document.getElementById('progress-bar');
+        const progressContainer = document.getElementById('progress');
+        const statusElement = document.getElementById('status');
+        const originalVideo = document.getElementById('original-video');
+        const compressedVideo = document.getElementById('compressed-video');
+        const iosWarning = document.getElementById('ios-warning');
+        
+        let compressedBlob = null;
+        let isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        
+        // تحذير خاص لأجهزة iOS
+        if (isIOS) {
+            iosWarning.style.display = 'block';
+            iosWarning.textContent = 'ملاحظة: على أجهزة iPhone، يفضل استخدام مقاطع فيديو قصيرة (أقل من دقيقة)';
         }
-    }
-
-    function setupUI(ffmpeg, fetchFile) {
-        document.getElementById('convert-btn').addEventListener('click', async () => {
-            const file = document.getElementById('file-input').files[0];
-            if (!file) return alert('يجب اختيار ملف فيديو أولاً');
-
-            try {
-                document.getElementById('convert-btn').disabled = true;
-                document.getElementById('status').textContent = 'جارٍ معالجة الفيديو...';
-                document.getElementById('progress').style.display = 'block';
-
-                // 1. كتابة الملف إلى نظام الملفات الظاهري
-                ffmpeg.FS('writeFile', file.name, await fetchFile(file));
-
-                // 2. تشغيل أمر التحويل (بإعدادات متوافقة)
-                await ffmpeg.run(
-                    '-i', file.name,
-                    '-c:v', 'libx264',
-                    '-preset', 'fast',
-                    '-crf', '23',
-                    '-movflags', '+faststart',
-                    'output.mp4'
-                );
-
-                // 3. قراءة الناتج
-                const data = ffmpeg.FS('readFile', 'output.mp4');
-                const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+        
+        // تمكين الزر عند اختيار ملف
+        fileInput.addEventListener('change', function() {
+            if (this.files && this.files[0]) {
+                const file = this.files[0];
                 
-                // 4. عرض الناتج
-                const video = document.getElementById('output');
-                video.src = url;
-                video.style.display = 'block';
-                document.getElementById('status').textContent = 'تم التحويل بنجاح!';
-            } catch (error) {
-                showError(error);
-            } finally {
-                document.getElementById('convert-btn').disabled = false;
-                document.getElementById('progress').style.display = 'none';
+                // تحقق من حجم الفيديو على iOS
+                if (isIOS && file.size > 50 * 1024 * 1024) { // أكثر من 50MB
+                    statusElement.textContent = 'الملف كبير جداً لجهاز iPhone. يرجى اختيار فيديو أصغر';
+                    compressBtn.disabled = true;
+                    return;
+                }
+                
+                originalVideo.src = URL.createObjectURL(file);
+                originalVideo.style.display = 'block';
+                compressBtn.disabled = false;
+                statusElement.textContent = 'جاهز للضغط - انقر على زر "ضغط الفيديو"';
             }
         });
-    }
-
-    function showError(error) {
-        console.error(error);
-        document.getElementById('compat-message').innerHTML = `
-            <strong>حدث خطأ:</strong> ${error.message}<br><br>
-            <b>الحلول المقترحة:</b>
-            <ol>
-                <li>تأكد من استخدام Chrome/Firefox حديث</li>
-                <li>جرب تشغيل الأداة على <a href="http://localhost:3000">خادم محلي</a></li>
-                <li>حدّث الصفحة (F5)</li>
-                <li>جرب متصفحاً آخر</li>
-            </ol>
-            <small>تفاصيل الخطأ: ${error}</small>
-        `;
-    }
-
-    // بدء التطبيق بعد تحميل الصفحة
-    window.addEventListener('DOMContentLoaded', initializeFFmpeg);
+        
+        // ضغط الفيديو
+        compressBtn.addEventListener('click', async function() {
+            const file = fileInput.files[0];
+            if (!file) return;
+            
+            try {
+                compressBtn.disabled = true;
+                progressContainer.style.display = 'block';
+                statusElement.textContent = 'جارٍ معالجة الفيديو...';
+                
+                // إنشاء عنصر فيديو مؤقت
+                const videoElement = document.createElement('video');
+                videoElement.setAttribute('playsinline', '');
+                videoElement.src = URL.createObjectURL(file);
+                
+                // انتظر حتى يتم تحميل بيانات الفيديو
+                await new Promise((resolve, reject) => {
+                    videoElement.onloadedmetadata = resolve;
+                    videoElement.onerror = reject;
+                    videoElement.load();
+                });
+                
+                // تشغيل الفيديو (مطلوب على iOS)
+                try {
+                    await videoElement.play();
+                } catch (e) {
+                    console.log('التشغيل التلقائي محظور:', e);
+                    statusElement.textContent = 'الرجاء النقر على الفيديو الأصلي للبدء ثم إعادة المحاولة';
+                    compressBtn.disabled = false;
+                    return;
+                }
+                
+                // حساب الأبعاد الجديدة (نصف الحجم الأصلي)
+                const targetWidth = Math.floor(videoElement.videoWidth / 2);
+                const targetHeight = Math.floor(videoElement.videoHeight / 2);
+                
+                // إنشاء canvas للرسم
+                const canvas = document.createElement('canvas');
+                canvas.width = targetWidth;
+                canvas.height = targetHeight;
+                const ctx = canvas.getContext('2d');
+                
+                // استخدام صيغة متوافقة مع iOS
+                const mimeType = isIOS ? 'video/mp4' : 'video/webm';
+                const codecs = isIOS ? 'avc1.42E01E,mp4a.40.2' : 'vp9,opus';
+                
+                if (!MediaRecorder.isTypeSupported(`${mimeType};codecs=${codecs}`)) {
+                    throw new Error('الصيغة غير مدعومة في هذا المتصفح');
+                }
+                
+                // تسجيل الفيديو المضغوط
+                const stream = canvas.captureStream(15); // تقليل معدل الإطارات لتحسين الأداء
+                const mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: `${mimeType};codecs=${codecs}`,
+                    bitsPerSecond: isIOS ? 300000 : 500000 // معدل بت أقل لـ iOS
+                });
+                
+                const chunks = [];
+                let startTime = Date.now();
+                let framesProcessed = 0;
+                const totalFrames = Math.floor(videoElement.duration * 15); // حسب معدل الإطارات الجديد
+                
+                mediaRecorder.ondataavailable = function(e) {
+                    if (e.data.size > 0) {
+                        chunks.push(e.data);
+                        framesProcessed++;
+                        const progress = Math.min(100, Math.floor((framesProcessed / totalFrames) * 100));
+                        progressBar.style.width = `${progress}%`;
+                        statusElement.textContent = `جارٍ الضغط... ${progress}%`;
+                    }
+                };
+                
+                mediaRecorder.onstop = function() {
+                    const fileExtension = isIOS ? 'mp4' : 'webm';
+                    compressedBlob = new Blob(chunks, { type: mimeType });
+                    compressedVideo.src = URL.createObjectURL(compressedBlob);
+                    compressedVideo.style.display = 'block';
+                    downloadBtn.style.display = 'inline-block';
+                    downloadBtn.disabled = false;
+                    statusElement.textContent = `تم الضغط بنجاح! الحجم الأصلي: ${formatFileSize(file.size)}، المضغوط: ${formatFileSize(compressedBlob.size)}`;
+                    compressBtn.disabled = false;
+                    
+                    // تحرير الذاكرة
+                    URL.revokeObjectURL(videoElement.src);
+                };
+                
+                mediaRecorder.start(100); // جمع البيانات كل 100 مللي ثانية
+                
+                // رسم الفيديو على canvas
+                function drawVideoFrame() {
+                    if (videoElement.paused || videoElement.ended) {
+                        mediaRecorder.stop();
+                        return;
+                    }
+                    
+                    ctx.drawImage(videoElement, 0, 0, targetWidth, targetHeight);
+                    requestAnimationFrame(drawVideoFrame);
+                }
+                
+                videoElement.addEventListener('play', drawVideoFrame);
+                videoElement.currentTime = 0;
+                
+                // بدء التشغيل (مهم لـ iOS)
+                try {
+                    await videoElement.play();
+                } catch (e) {
+                    console.error('فشل تشغيل الفيديو:', e);
+                    statusElement.textContent = 'فشل تشغيل الفيديو. يرجى المحاولة مرة أخرى';
+                    compressBtn.disabled = false;
+                    mediaRecorder.stop();
+                }
+                
+            } catch (error) {
+                statusElement.textContent = 'حدث خطأ أثناء الضغط: ' + error.message;
+                console.error(error);
+                compressBtn.disabled = false;
+            }
+        });
+        
+        // تنزيل الفيديو المضغوط
+        downloadBtn.addEventListener('click', function() {
+            if (!compressedBlob) return;
+            
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(compressedBlob);
+            a.download = 'compressed-' + fileInput.files[0].name.replace(/\.[^/.]+$/, '') + (isIOS ? '.mp4' : '.webm');
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        });
+        
+        // دالة لتنسيق حجم الملف
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 بايت';
+            const k = 1024;
+            const sizes = ['بايت', 'كيلوبايت', 'ميجابايت', 'جيجابايت'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
     </script>
 </body>
 </html>
