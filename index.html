@@ -111,125 +111,135 @@
             }
         });
         
-        // ضغط الفيديو
+         // متغيرات جديدة للتحكم في العملية
+        let mediaRecorder;
+        let videoElement;
+        let recordingActive = false;
+
+        // تعديل دالة ضغط الفيديو
         compressBtn.addEventListener('click', async function() {
             const file = fileInput.files[0];
-            if (!file) return;
+            if (!file || recordingActive) return;
             
             try {
+                recordingActive = true;
                 compressBtn.disabled = true;
                 progressContainer.style.display = 'block';
                 statusElement.textContent = 'جارٍ معالجة الفيديو...';
                 
-                // إنشاء عنصر فيديو مؤقت
-                const videoElement = document.createElement('video');
+                // إعادة تعيين شريط التقدم
+                progressBar.style.width = '0%';
+                
+                // إنشاء عنصر فيديو جديد في كل مرة
+                videoElement = document.createElement('video');
                 videoElement.setAttribute('playsinline', '');
                 videoElement.src = URL.createObjectURL(file);
                 
-                // انتظر حتى يتم تحميل بيانات الفيديو
+                // الانتظار حتى يتم تحميل البيانات
                 await new Promise((resolve, reject) => {
                     videoElement.onloadedmetadata = resolve;
                     videoElement.onerror = reject;
-                    videoElement.load();
                 });
                 
-                // تشغيل الفيديو (مطلوب على iOS)
+                // بدء التشغيل (مهم لـ iOS)
                 try {
                     await videoElement.play();
                 } catch (e) {
-                    console.log('التشغيل التلقائي محظور:', e);
                     statusElement.textContent = 'الرجاء النقر على الفيديو الأصلي للبدء ثم إعادة المحاولة';
                     compressBtn.disabled = false;
+                    recordingActive = false;
                     return;
                 }
                 
-                // حساب الأبعاد الجديدة (نصف الحجم الأصلي)
-                const targetWidth = Math.floor(videoElement.videoWidth / 2);
-                const targetHeight = Math.floor(videoElement.videoHeight / 2);
-                
-                // إنشاء canvas للرسم
+                // إعدادات Canvas
                 const canvas = document.createElement('canvas');
-                canvas.width = targetWidth;
-                canvas.height = targetHeight;
+                canvas.width = Math.floor(videoElement.videoWidth / 2);
+                canvas.height = Math.floor(videoElement.videoHeight / 2);
                 const ctx = canvas.getContext('2d');
                 
-                // استخدام صيغة متوافقة مع iOS
-                const mimeType = isIOS ? 'video/mp4' : 'video/webm';
-                const codecs = isIOS ? 'avc1.42E01E,mp4a.40.2' : 'vp9,opus';
-                
-                if (!MediaRecorder.isTypeSupported(`${mimeType};codecs=${codecs}`)) {
-                    throw new Error('الصيغة غير مدعومة في هذا المتصفح');
-                }
-                
-                // تسجيل الفيديو المضغوط
-                const stream = canvas.captureStream(15); // تقليل معدل الإطارات لتحسين الأداء
-                const mediaRecorder = new MediaRecorder(stream, {
-                    mimeType: `${mimeType};codecs=${codecs}`,
-                    bitsPerSecond: isIOS ? 300000 : 500000 // معدل بت أقل لـ iOS
+                // إعداد MediaRecorder
+                const stream = canvas.captureStream(15);
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'video/mp4',
+                    bitsPerSecond: 300000
                 });
                 
                 const chunks = [];
-                let startTime = Date.now();
-                let framesProcessed = 0;
-                const totalFrames = Math.floor(videoElement.duration * 15); // حسب معدل الإطارات الجديد
+                let lastTime = 0;
                 
                 mediaRecorder.ondataavailable = function(e) {
                     if (e.data.size > 0) {
                         chunks.push(e.data);
-                        framesProcessed++;
-                        const progress = Math.min(100, Math.floor((framesProcessed / totalFrames) * 100));
+                        const progress = Math.min(100, Math.floor((videoElement.currentTime / videoElement.duration) * 100));
                         progressBar.style.width = `${progress}%`;
                         statusElement.textContent = `جارٍ الضغط... ${progress}%`;
                     }
                 };
                 
                 mediaRecorder.onstop = function() {
-                    const fileExtension = isIOS ? 'mp4' : 'webm';
-                    compressedBlob = new Blob(chunks, { type: mimeType });
+                    compressedBlob = new Blob(chunks, { type: 'video/mp4' });
                     compressedVideo.src = URL.createObjectURL(compressedBlob);
                     compressedVideo.style.display = 'block';
                     downloadBtn.style.display = 'inline-block';
                     downloadBtn.disabled = false;
                     statusElement.textContent = `تم الضغط بنجاح! الحجم الأصلي: ${formatFileSize(file.size)}، المضغوط: ${formatFileSize(compressedBlob.size)}`;
                     compressBtn.disabled = false;
+                    recordingActive = false;
                     
                     // تحرير الذاكرة
                     URL.revokeObjectURL(videoElement.src);
+                    videoElement.remove();
                 };
                 
+                // بدء التسجيل
                 mediaRecorder.start(100); // جمع البيانات كل 100 مللي ثانية
                 
-                // رسم الفيديو على canvas
-                function drawVideoFrame() {
-                    if (videoElement.paused || videoElement.ended) {
-                        mediaRecorder.stop();
-                        return;
+                // دالة لرسم الإطارات
+                function processFrame() {
+                    if (!recordingActive) return;
+                    
+                    const now = Date.now();
+                    if (now - lastTime >= 1000/15) { // 15 إطار/ثانية
+                        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+                        lastTime = now;
                     }
                     
-                    ctx.drawImage(videoElement, 0, 0, targetWidth, targetHeight);
-                    requestAnimationFrame(drawVideoFrame);
+                    if (videoElement.paused || videoElement.ended || videoElement.currentTime >= videoElement.duration - 0.1) {
+                        mediaRecorder.stop();
+                    } else {
+                        requestAnimationFrame(processFrame);
+                    }
                 }
                 
-                videoElement.addEventListener('play', drawVideoFrame);
-                videoElement.currentTime = 0;
+                // بدء المعالجة
+                processFrame();
                 
-                // بدء التشغيل (مهم لـ iOS)
-                try {
-                    await videoElement.play();
-                } catch (e) {
-                    console.error('فشل تشغيل الفيديو:', e);
-                    statusElement.textContent = 'فشل تشغيل الفيديو. يرجى المحاولة مرة أخرى';
-                    compressBtn.disabled = false;
-                    mediaRecorder.stop();
-                }
+                // إيقاف تلقائي بعد مدة الفيديو + هامش أمان
+                setTimeout(() => {
+                    if (recordingActive) {
+                        mediaRecorder.stop();
+                    }
+                }, videoElement.duration * 1000 + 2000);
                 
             } catch (error) {
-                statusElement.textContent = 'حدث خطأ أثناء الضغط: ' + error.message;
+                statusElement.textContent = 'حدث خطأ: ' + error.message;
                 console.error(error);
                 compressBtn.disabled = false;
+                recordingActive = false;
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
             }
         });
         
+        // إيقاف المعالجة عند مغادرة الصفحة
+        window.addEventListener('beforeunload', () => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+        });
+        
+        // بقية الكود كما هو...
         // تنزيل الفيديو المضغوط
         downloadBtn.addEventListener('click', function() {
             if (!compressedBlob) return;
