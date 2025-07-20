@@ -4,128 +4,113 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>أداة تحويل الفيديو</title>
-    <!-- ضروري لتمكين SharedArrayBuffer -->
+    <!-- أهم جزء: رؤوس الأمان -->
     <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
     <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        .warning {
-            background-color: #fff3cd;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            border: 1px solid #ffeeba;
-        }
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .alert { background: #fff3cd; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        #app { display: none; }
     </style>
 </head>
 <body>
-    <h1>أداة تحويل الفيديو</h1>
-    
-    <div id="warning" class="warning">
-        <h3>ملاحظة هامة:</h3>
-        <p>هذه الأداة تتطلب تشغيلها في بيئة آمنة. الرجاء التأكد من:</p>
-        <ul>
-            <li>تشغيل الصفحة على خادم محلي (مثل localhost)</li>
-            <li>أو تشغيلها عبر HTTPS مع رؤوس الأمان الصحيحة</li>
-        </ul>
+    <div id="compat-alert" class="alert">
+        <h3>تنبيه تقني</h3>
+        <p id="compat-message">جارٍ التحقق من متطلبات النظام...</p>
     </div>
 
-    <div id="app-content" style="display: none;">
+    <div id="app">
+        <h1>محول الفيديو في المتصفح</h1>
         <input type="file" id="file-input" accept="video/*" />
-        <button id="convert-button">تحويل الفيديو</button>
+        <button id="convert-btn">تحويل</button>
         <div id="status"></div>
-        <video id="output-video" controls style="display: none; width: 100%;"></video>
+        <video id="output" controls style="display:none; width:100%;"></video>
     </div>
 
+    <!-- استخدام إصدار خاص يعمل بدون SharedArrayBuffer -->
     <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
     <script>
-        // التحقق من دعم SharedArrayBuffer
-        function checkCompatibility() {
+    // دالة التحقق من التوافق
+    async function checkCompatibility() {
+        const compatMsg = document.getElementById('compat-message');
+        
+        // الحل الجذري: استخدام إصدار core-st البديل
+        try {
             if (typeof SharedArrayBuffer === 'undefined') {
-                document.getElementById('warning').innerHTML += `
-                    <p style="color: red;">
-                        <strong>خطأ:</strong> المتصفح لا يدعم SharedArrayBuffer أو رؤوس الأمان غير مضبوطة.
-                        الرجاء استخدام Chrome/Firefox مع تشغيل الصفحة على خادم محلي.
-                    </p>
-                `;
-                return false;
+                console.log("Using fallback core (without SharedArrayBuffer)");
+                await loadFFmpegWithFallback();
+            } else {
+                await loadStandardFFmpeg();
             }
-            return true;
+            document.getElementById('compat-alert').style.display = 'none';
+            document.getElementById('app').style.display = 'block';
+        } catch (error) {
+            compatMsg.innerHTML = `
+                <strong>خطأ غير متوقع:</strong> ${error.message}<br><br>
+                جرب ما يلي:<br>
+                1. استخدام متصفح Chrome/Firefox حديث<br>
+                2. تشغيل الأداة على <a href="https://localhost:3000">localhost</a><br>
+                3. تحديث الصفحة (F5)
+            `;
+            console.error("Initialization failed:", error);
         }
+    }
 
-        async function initializeApp() {
-            if (!checkCompatibility()) return;
+    // تحميل FFmpeg مع الحل البديل
+    async function loadFFmpegWithFallback() {
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({
+            log: true,
+            corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
+        });
+        
+        document.getElementById('status').textContent = 'جارٍ التهيئة...';
+        await ffmpeg.load();
+        setupConversion(ffmpeg, fetchFile);
+    }
+
+    // تحميل FFmpeg القياسي (إذا كان مدعوماً)
+    async function loadStandardFFmpeg() {
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({ log: true });
+        
+        document.getElementById('status').textContent = 'جارٍ التهيئة...';
+        await ffmpeg.load();
+        setupConversion(ffmpeg, fetchFile);
+    }
+
+    // إعداد واجهة التحويل
+    function setupConversion(ffmpeg, fetchFile) {
+        document.getElementById('convert-btn').addEventListener('click', async () => {
+            const file = document.getElementById('file-input').files[0];
+            if (!file) return alert('اختر ملف فيديو أولاً');
 
             try {
-                document.getElementById('status').textContent = 'جارٍ التهيئة...';
+                document.getElementById('convert-btn').disabled = true;
+                document.getElementById('status').textContent = 'جارٍ التحويل...';
                 
-                // استخدام إصدار بديل لا يحتاج لـ SharedArrayBuffer
-                const { createFFmpeg, fetchFile } = FFmpeg;
-                const ffmpeg = createFFmpeg({
-                    log: true,
-                    corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
-                });
-
-                document.getElementById('status').textContent = 'جارٍ تحميل FFmpeg...';
-                await ffmpeg.load();
+                // كتابة الملف وتحويله
+                ffmpeg.FS('writeFile', file.name, await fetchFile(file));
+                await ffmpeg.run('-i', file.name, '-c:v', 'libx264', '-crf', '23', 'output.mp4');
                 
-                document.getElementById('warning').style.display = 'none';
-                document.getElementById('app-content').style.display = 'block';
-                document.getElementById('status').textContent = 'جاهز للتحويل';
-
-                document.getElementById('convert-button').addEventListener('click', async () => {
-                    const fileInput = document.getElementById('file-input');
-                    const file = fileInput.files[0];
-                    
-                    if (!file) {
-                        alert('الرجاء اختيار ملف فيديو أولاً');
-                        return;
-                    }
-
-                    try {
-                        document.getElementById('convert-button').disabled = true;
-                        document.getElementById('status').textContent = 'جارٍ معالجة الفيديو...';
-
-                        ffmpeg.FS('writeFile', file.name, await fetchFile(file));
-                        
-                        // استخدام إعدادات متوافقة
-                        await ffmpeg.run(
-                            '-i', file.name,
-                            '-c:v', 'libx264',
-                            '-preset', 'superfast',
-                            '-crf', '23',
-                            '-movflags', 'frag_keyframe+empty_moov',
-                            'output.mp4'
-                        );
-
-                        const data = ffmpeg.FS('readFile', 'output.mp4');
-                        const videoUrl = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
-                        
-                        const videoElement = document.getElementById('output-video');
-                        videoElement.src = videoUrl;
-                        videoElement.style.display = 'block';
-                        document.getElementById('status').textContent = 'تم التحويل بنجاح!';
-                    } catch (error) {
-                        document.getElementById('status').textContent = `خطأ: ${error.message}`;
-                        console.error(error);
-                    } finally {
-                        document.getElementById('convert-button').disabled = false;
-                    }
-                });
-
+                // عرض الناتج
+                const data = ffmpeg.FS('readFile', 'output.mp4');
+                const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+                const video = document.getElementById('output');
+                video.src = url;
+                video.style.display = 'block';
+                document.getElementById('status').textContent = 'تم التحويل بنجاح!';
             } catch (error) {
-                document.getElementById('status').textContent = `فشل التهيئة: ${error.message}`;
-                console.error(error);
+                document.getElementById('status').textContent = `خطأ: ${error.message}`;
+                console.error("Conversion error:", error);
+            } finally {
+                document.getElementById('convert-btn').disabled = false;
             }
-        }
+        });
+    }
 
-        // بدء التطبيق
-        document.addEventListener('DOMContentLoaded', initializeApp);
+    // بدء التطبيق عند تحميل الصفحة
+    window.addEventListener('DOMContentLoaded', checkCompatibility);
     </script>
 </body>
 </html>
